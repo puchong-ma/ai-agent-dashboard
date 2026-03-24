@@ -15,6 +15,8 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+import os
+google_api_key = os.getenv("GOOGLE_API_KEY")
 
 # Import tools จากไฟล์ tools.py ใน folder เดียวกัน
 from core.tools import search_tool
