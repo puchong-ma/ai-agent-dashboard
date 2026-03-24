@@ -4,7 +4,11 @@ import sqlite3
 from datetime import datetime
 from typing import Annotated, TypedDict
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass # บน Cloud ไม่ต้องใช้ dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
