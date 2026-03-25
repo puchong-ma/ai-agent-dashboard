@@ -4,3 +4,4 @@ langchain-google-genai
 langchain-tavily
 langchain-community
 langchain-core
+langgraph-checkpoint-sqlite

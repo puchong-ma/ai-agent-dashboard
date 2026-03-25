@@ -13,7 +13,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.sqlite import SqliteSaver
+# from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph_checkpoint_sqlite import SqliteSaver
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 import os
 google_api_key = os.getenv("GOOGLE_API_KEY")
