@@ -20,7 +20,7 @@ import os
 google_api_key = os.getenv("GOOGLE_API_KEY")
 
 # Import tools จากไฟล์ tools.py ใน folder เดียวกัน
-from core.tools import search_tool
+from core.tools import search_tool, send_line_message
 
 load_dotenv()
 
@@ -82,6 +82,9 @@ def reviewer_node(state: TeamState):
         score = int(match.group(1))
     elif match := re.search(r"(\d+)/10", content):
         score = int(match.group(1))
+
+    if score < 8:
+        send_line_message("⚠️ [AI Reviewer] ตรวจพบจุดที่ต้องแก้ไข กรุณาเข้าไปสั่งการต่อบน Dashboard")
         
     return {"messages": [response], "article_score": score}
 
@@ -89,6 +92,11 @@ def translator_node(state: TeamState):
     thai_article = state.get("final_article", "")
     system_msg = SystemMessage(content="Translate Thai to English Markdown strictly. Keep table format.")
     response = llm_pro.invoke([system_msg, HumanMessage(content=thai_article)])
+    # 📢 ส่งข้อความเมื่อจบงาน
+    topic = state.get("messages")[0].content[:30] # ดึงหัวข้อสั้นๆ
+    msg = f"✅ [AI Agent] ทำงานเสร็จแล้ว!\nหัวข้อ: {topic}...\nตรวจสอบและดาวน์โหลดบทความได้บน Dashboard ครับ"
+    send_line_message(msg)
+    
     return {"messages": [response], "final_article": response.content}
 
 # 4. Routing Logic (การตัดสินใจ)

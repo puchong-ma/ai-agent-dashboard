@@ -1,5 +1,7 @@
 import os
 from dotenv import load_dotenv
+from linebot import LineBotApi
+from linebot.models import TextSendMessage
 # 1. ต้องโหลด .env ก่อนที่จะเรียกใช้ Tool อื่นๆ เสมอ
 load_dotenv()
 
@@ -46,6 +48,22 @@ def web_search(query: str):
         print(f"   - Source {i+1}: {res.get('url')} (Score: {res.get('score')})")
         
     return results
+
+def send_line_message(message: str):
+    # ดึงค่าจาก .env (Local) หรือ Secrets (Cloud)
+    line_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+    user_id = os.getenv("LINE_USER_ID")
+    
+    if not line_token or not user_id:
+        print("⚠️ [Line Error]: ไม่พบรหัส Access Token หรือ User ID")
+        return
+        
+    try:
+        line_bot_api = LineBotApi(line_token)
+        line_bot_api.push_message(user_id, TextSendMessage(text=message))
+        print("✅ [Line Success]: ส่งข้อความแจ้งเตือนเรียบร้อย")
+    except Exception as e:
+        print(f"❌ [Line Exception]: {e}")
 
 # tools = [search_tool, save_report]
 tools = [search_tool, save_report]

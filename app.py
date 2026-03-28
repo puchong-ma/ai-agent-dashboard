@@ -70,32 +70,37 @@ if project_name:
         # แสดงบทความล่าสุด (ถ้ามี)
         # ส่วนการ Preview และ Download บทความ
         if "final_article" in snapshot.values:
-            with st.expander("📝 ดูเนื้อหาบทความล่าสุด", expanded=True):
-                content = snapshot.values["final_article"]
+            # 1. ดึงค่าออกมาเก็บในตัวแปร content ก่อนเป็นอันดับแรก
+            content = snapshot.values["final_article"] 
+            
+            st.subheader("📄 บทความฉบับสมบูรณ์")
+            
+            # 2. ใช้ st.expander ครอบส่วนที่จะโชว์เนื้อหา
+            with st.expander("📝 คลิกเพื่อดูเนื้อหาบทความ", expanded=True):
                 st.markdown(content)
-                
-                # ปุ่ม Download 
-        st.download_button(
-            label="📥 ดาวน์โหลดบทความ (Markdown)",
-            data=content,
-            file_name=f"{project_name}_report.md",
-            mime="text/markdown",
-            key=f"dl_btn_{project_name}"
-        )
+            
+            # 3. วางปุ่ม Download ไว้ด้านล่าง (ตอนนี้ content ถูกนิยามแล้ว จะไม่ Error)
+            st.download_button(
+                label="📥 ดาวน์โหลดบทความ (Markdown)",
+                data=content, 
+                file_name=f"{project_name}_article.md",
+                mime="text/markdown",
+                key=f"dl_btn_{project_name}"
+            )
 
-        # เพิ่มส่วนนี้ใน app.py ตรงที่โชว์คะแนน
+        ## --- ส่วนการแสดงผล Quality Score ---
+        # 1. ตรวจสอบว่าใน State ของ AI มีการประเมินคะแนนหรือยัง
         if "article_score" in snapshot.values:
+            # 2. ดึงค่าคะแนนออกมาเก็บในตัวแปร score
             score = snapshot.values["article_score"]
             
-            st.subheader("📊 การประเมินคุณภาพ (Quality Audit)")
-            
-            # แบ่งคอลัมน์โชว์ Metric และ Progress Bar 
-            m1, m2 = st.columns([1, 3])
-            with m1:
-                st.metric("คะแนนปัจจุบัน", f"{score}/10", delta=score-8 if score else 0)
-            with m2:
-                st.write("ระดับความพร้อมของบทความ")
-                st.progress(score * 10) # แปลง 1-10 เป็น 0-100%
+            # 3. แสดงผล Metric
+            st.metric("Quality Score", f"{score}/10")
+            st.progress(score * 10) # แสดงเป็นแถบพลัง 0-100%
+        else:
+            # 4. กรณีที่ยังไม่มีคะแนน (เช่น เพิ่งเริ่มรัน) ให้กำหนดค่าเริ่มต้นหรือแสดงข้อความแจ้งเตือน
+            st.metric("Quality Score", "N/A")
+            st.caption("รอผลการประเมินจาก Reviewer...")
 
         # ปุ่มควบคุม Human-in-the-loop
         # ปุ่มควบคุม Human-in-the-loop
@@ -117,6 +122,17 @@ if project_name:
                 else:
                     multi_agent_app.update_state(config, {"messages": [HumanMessage(content=instruction)]})
                 st.success("ส่งคำสั่งเรียบร้อย! กดปุ่ม 'อนุมัติ' เพื่อให้ AI เริ่มแก้")
+
+        # 1. ดึงค่าจาก State ออกมาเก็บในตัวแปร score (ถ้าไม่มีให้เป็น 0)
+        score = snapshot.values.get("article_score", 0)
+
+        # 2. แสดงผล Metric โดยใช้ตัวแปรที่ดึงออกมาแล้ว
+        if score > 0:
+            st.metric("Quality Score", f"{score}/10")
+            st.progress(score * 10) # แสดงแถบความคืบหน้า 0-100%
+        else:
+            st.metric("Quality Score", "รอการประเมิน")
+            st.caption("Reviewer กำลังตรวจสอบเนื้อหา...")
 
         # สร้าง Tabs สำหรับแยกส่วนเนื้อหา 
         tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📄 บทความที่ได้", "🕵️ เบื้องหลังการทำงาน (Logs)"])
