@@ -41,11 +41,19 @@ llm_ultra = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0)
 # 3. นิยามความสามารถของแผนกต่างๆ (Nodes)
 
 def researcher_node(state: TeamState):
-    current_date = datetime.now().strftime("%d %B %Y")
-    system_msg = SystemMessage(content=f"Today is {current_date}. Search for latest news. Provide a factual summary.")
-    llm_with_search = llm.bind_tools([search_tool])
-    response = llm_with_search.invoke([system_msg] + state["messages"])
-    return {"messages": [response]}
+    try:
+        current_date = datetime.now().strftime("%d %B %Y")
+        system_msg = SystemMessage(content=f"Today is {current_date}. Search for latest news. Provide a factual summary.")
+        llm_with_search = llm.bind_tools([search_tool])
+        response = llm_with_search.invoke([system_msg] + state["messages"])
+        return {"messages": [response]}
+    except Exception as e:
+        # เมื่อเกิด Error ให้ส่ง Line บอกเราทันที
+        error_msg = f"❌ [Error] ในขั้นตอน Researcher:\n{str(e)}"
+        send_line_message(error_msg)
+        
+        # ส่งข้อความ Error กลับไปในระบบเพื่อให้ Graph หยุดทำงานอย่างสุภาพ
+        return { "messages": [HumanMessage(content=f"Error occurred: {str(e)}")] }
 
 def editor_node(state: TeamState):
     # ดึงคำสั่งล่าสุดและสรุปวิจัยเพื่อประหยัด Token
@@ -89,15 +97,20 @@ def reviewer_node(state: TeamState):
     return {"messages": [response], "article_score": score}
 
 def translator_node(state: TeamState):
-    thai_article = state.get("final_article", "")
-    system_msg = SystemMessage(content="Translate Thai to English Markdown strictly. Keep table format.")
-    response = llm_pro.invoke([system_msg, HumanMessage(content=thai_article)])
-    # 📢 ส่งข้อความเมื่อจบงาน
-    topic = state.get("messages")[0].content[:30] # ดึงหัวข้อสั้นๆ
-    msg = f"✅ [AI Agent] ทำงานเสร็จแล้ว!\nหัวข้อ: {topic}...\nตรวจสอบและดาวน์โหลดบทความได้บน Dashboard ครับ"
-    send_line_message(msg)
-    
-    return {"messages": [response], "final_article": response.content}
+    try:
+        thai_article = state.get("final_article", "")
+        system_msg = SystemMessage(content="Translate Thai to English Markdown strictly. Keep table format.")
+        response = llm_pro.invoke([system_msg, HumanMessage(content=thai_article)])
+        # 📢 ส่งข้อความเมื่อจบงาน
+        topic = state.get("messages")[0].content[:30] # ดึงหัวข้อสั้นๆ
+        msg = f"✅ [AI Agent] ทำงานเสร็จแล้ว!\nหัวข้อ: {topic}...\nตรวจสอบและดาวน์โหลดบทความได้บน Dashboard ครับ"
+        send_line_message(msg)
+        
+        return {"messages": [response], "final_article": response.content}
+    except Exception as e:
+        # แจ้งเตือนเมื่อเกิด Error
+        send_line_message(f"❌ ระบบขัดข้องในขั้นตอน Translator: {str(e)}")
+        raise e
 
 # 4. Routing Logic (การตัดสินใจ)
 

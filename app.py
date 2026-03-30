@@ -3,6 +3,9 @@ from core.graph import multi_agent_app, get_all_threads
 from langchain_core.messages import HumanMessage, AIMessage
 
 # --- 1. หน้าจอการตั้งค่า (Page Config) ---
+project_name = ""
+style_choice = "Technical" # กำหนดค่าเริ่มต้นไว้ก่อนเลย
+
 st.set_page_config(page_title="AI Agent Team Dashboard", layout="wide")
 st.title("🤖 AI Multi-Agent Team (Week 6)")
 
@@ -21,12 +24,44 @@ with st.sidebar:
 
     st.divider()
     st.header("🎨 Writing Style")
+    # มั่นใจว่าบรรทัดนี้รันแน่นอนเมื่อเปิดแอป
     style_choice = st.selectbox(
         "เลือกสไตล์การเขียน",
         ["Technical", "Storytelling", "Executive Summary"]
     )
+
+    if st.button("🗑️ ล้างประวัติโปรเจกต์นี้"):
+        import sqlite3
+        conn = sqlite3.connect("agent_memory.db")
+        cursor = conn.cursor()
+        
+        try:
+            # 1. ตรวจสอบก่อนว่ามีตาราง checkpoints หรือไม่
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'")
+            table_exists = cursor.fetchone()
+            
+            if table_exists:
+                # 2. ถ้ามีตาราง ให้ลบข้อมูลตามปกติ
+                cursor.execute("DELETE FROM checkpoints WHERE thread_id = ?", (project_name,))
+                conn.commit()
+                st.success(f"ล้างข้อมูลโปรเจกต์ {project_name} เรียบร้อย!")
+            else:
+                # 3. ถ้าไม่มีตาราง แสดงว่ายังไม่มีประวัติให้ลบ
+                st.info("ยังไม่มีประวัติข้อมูลในระบบให้ลบครับ")
+                
+        except Exception as e:
+            st.error(f"เกิดข้อผิดพลาด: {e}")
+        finally:
+            conn.close()
+            
+        st.rerun()
     
-    st.info(f"Project ID: {project_name}\nStyle: {style_choice}")
+    if st.button("🧨 Reset Database ทั้งหมด"):
+        import os
+        if os.path.exists("agent_memory.db"):
+            os.remove("agent_memory.db") # ลบไฟล์ทิ้งเลย
+            st.success("ลบฐานข้อมูลทั้งหมดเรียบร้อย! ระบบจะสร้างไฟล์ใหม่เมื่อเริ่มรันงาน")
+            st.rerun()
 
 # --- 3. ส่วนควบคุมการทำงาน (Main Control Logic) ---
 if project_name:
@@ -39,8 +74,9 @@ if project_name:
     if not snapshot.values:
         topic = st.text_input("ระบุหัวข้อที่ต้องการวิจัย:")
         if st.button("🚀 เริ่มต้นรันระบบ", key="start_button"):
-            inputs = {"messages": [("user", topic)], "style_preference": style_choice}
-            
+
+            if project_name and style_choice:
+                inputs = {"messages": [("user", topic)], "style_preference": style_choice}
             # สร้าง Container สำหรับโชว์ Log 
             log_container = st.container()
             
@@ -133,6 +169,12 @@ if project_name:
         else:
             st.metric("Quality Score", "รอการประเมิน")
             st.caption("Reviewer กำลังตรวจสอบเนื้อหา...")
+
+        # --- เตรียมข้อมูลสำหรับ Tabs ---
+        # ดึงเนื้อหาบทความ (ถ้าไม่มีให้เป็นค่าว่าง) 
+        content = snapshot.values.get("final_article", "") 
+        # ดึงคะแนน (ถ้าไม่มีให้เป็น 0) 
+        score = snapshot.values.get("article_score", 0)
 
         # สร้าง Tabs สำหรับแยกส่วนเนื้อหา 
         tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📄 บทความที่ได้", "🕵️ เบื้องหลังการทำงาน (Logs)"])

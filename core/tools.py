@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 from linebot import LineBotApi
 from linebot.models import TextSendMessage
+from linebot.models import FlexSendMessage
 # 1. ต้องโหลด .env ก่อนที่จะเรียกใช้ Tool อื่นๆ เสมอ
 load_dotenv()
 
@@ -64,6 +65,45 @@ def send_line_message(message: str):
         print("✅ [Line Success]: ส่งข้อความแจ้งเตือนเรียบร้อย")
     except Exception as e:
         print(f"❌ [Line Exception]: {e}")
+
+def send_line_flex(topic: str, score: int):
+    line_token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
+    user_id = os.getenv("LINE_USER_ID")
+    
+    if not line_token or not user_id:
+        return "Missing Line Credentials"
+    
+    # โครงสร้าง JSON ของ Flex Message (ดีไซน์แบบการ์ดสรุปงาน)
+    flex_content = {
+      "type": "bubble",
+      "header": {
+        "type": "box", "layout": "vertical", "contents": [
+          {"type": "text", "text": "🔔 งานเสร็จสมบูรณ์!", "weight": "bold", "color": "#FFFFFF", "size": "lg"}
+        ], "backgroundColor": "#0367D3"
+      },
+      "body": {
+        "type": "box", "layout": "vertical", "contents": [
+          {"type": "text", "text": f"หัวข้อ: {topic}", "weight": "bold", "wrap": True},
+          {"type": "separator", "margin": "md"},
+          {"type": "box", "layout": "horizontal", "margin": "md", "contents": [
+            {"type": "text", "text": "Quality Score:", "size": "sm", "color": "#555555"},
+            {"type": "text", "text": f"{score}/10", "size": "sm", "weight": "bold", "align": "end", "color": "#1DB446" if score >= 8 else "#E63946"}
+          ]}
+        ]
+      },
+      "footer": {
+        "type": "box", "layout": "vertical", "contents": [
+          {"type": "button", "action": {"type": "uri", "label": "ดูบน Dashboard", "uri": "https://ai-agent-dashboard.streamlit.app"}, "style": "primary", "color": "#0367D3"}
+        ]
+      }
+    }
+
+    try:
+        line_bot_api = LineBotApi(line_token)
+        line_bot_api.push_message(user_id, FlexSendMessage(alt_text="AI งานเสร็จแล้ว!", contents=flex_content))
+        return "Success"
+    except Exception as e:
+        return str(e)
 
 # tools = [search_tool, save_report]
 tools = [search_tool, save_report]
