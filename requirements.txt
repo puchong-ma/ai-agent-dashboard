@@ -9,3 +9,5 @@ langgraph-checkpoint-sqlite
 line-bot-sdk
 psycopg2-binary
 langgraph-checkpoint-postgres
+psycopg[binary]
+streamlit-authenticator

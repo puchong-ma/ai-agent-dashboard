@@ -1,194 +1,210 @@
 import streamlit as st
-from core.graph import multi_agent_app, get_all_threads
+import streamlit_authenticator as stauth
 from langchain_core.messages import HumanMessage, AIMessage
+import psycopg
+import os
+from core.graph import get_app, get_all_threads
 
-# --- 1. หน้าจอการตั้งค่า (Page Config) ---
-project_name = ""
-style_choice = "Technical" # กำหนดค่าเริ่มต้นไว้ก่อนเลย
+# --- 1. ระบบ Authentication ---
+names = ["Yemeni Admin", "Test User"]
+usernames = ["yemeni", "user01"]
 
-st.set_page_config(page_title="AI Agent Team Dashboard", layout="wide")
-st.title("🤖 AI Multi-Agent Team (Week 6)")
+# >>> วางรหัสที่ Hash แล้วลงใน List นี้แทนรหัสเดิมครับ <<<
+passwords = [
+    '$2b$12$.aoBZa0yO1aeP.fYBdoxou9k01rGGE23b0bdbPb84SLuoEBelrLj2', # ของ yemeni
+    '$2b$12$uBOihww06q2O./fIu7n3AOLQwkyp/RTu6wMNZOqJd5.CWA2pzcxOm'  # ของ user01
+]
 
-# --- 2. Sidebar สำหรับจัดการ Project & Style ---
+# โครงสร้าง Credentials สำหรับเวอร์ชัน 0.4.2
+credentials = {
+    "usernames": {
+        u: {"name": n, "password": p} 
+        for u, n, p in zip(usernames, names, passwords)
+    }
+}
+
+# สร้าง Authenticator (ปรับโครงสร้าง argument)
+authenticator = stauth.Authenticate(
+    credentials,
+    "ai_agent_dashboard_cookie", # ชื่อคุกกี้
+    "signature_key_12345",       # คีย์สำหรับเซ็นชื่อ
+    cookie_expiry_days=30
+)
+
+# แสดงหน้า Login
+# 1. เรียกใช้งาน Login โดยไม่ต้องรับค่าใส่ตัวแปร
+authenticator.login(location="main")
+
+# 2. ดึงสถานะจาก st.session_state แทน
+authentication_status = st.session_state.get("authentication_status")
+name = st.session_state.get("name")
+username = st.session_state.get("username")
+
+if authentication_status == False:
+    st.error("Username หรือ Password ไม่ถูกต้อง")
+    st.stop()
+elif authentication_status == None:
+    st.warning("กรุณากรอก Username และ Password")
+    st.stop()
+# --- เริ่มต้นหน้า Dashboard เมื่อ Login ผ่าน ---
+st.set_page_config(page_title="AI Agent SaaS Dashboard", layout="wide")
+st.sidebar.title(f"สวัสดีครับ พี่ {name}")
+authenticator.logout("Logout", "sidebar")
+
+# --- 2. Sidebar สำหรับจัดการ Project ---
 with st.sidebar:
     st.header("📂 Project Management")
     
-    # ดึงรายชื่อ Thread ทั้งหมดจาก DB
-    existing_threads = get_all_threads()
-    project_option = st.selectbox("เลือกโปรเจกต์เดิม หรือสร้างใหม่", ["+ สร้างโปรเจกต์ใหม่"] + existing_threads)
+    # ดึงรายชื่อ Thread เฉพาะของ User นี้ (User Isolation)
+    all_threads = get_all_threads()
+    user_threads = [t.replace(f"{username}_", "") for t in all_threads if t.startswith(f"{username}_")]
     
+    # --- แก้ไขส่วนการเลือก Project ---
+    project_option = st.selectbox("เลือกโปรเจกต์ของคุณ", ["+ สร้างโปรเจกต์ใหม่"] + user_threads)
+
     if project_option == "+ สร้างโปรเจกต์ใหม่":
-        project_name = st.text_input("ระบุชื่อโปรเจกต์ใหม่", placeholder="เช่น my_project_01")
+        raw_name = st.text_input("ชื่อโปรเจกต์ใหม่", placeholder="my_new_task")
+        if raw_name:
+            st.session_state.current_project = raw_name.strip()
+        project_name = st.session_state.get("current_project", "")
     else:
+        st.session_state.current_project = project_option
         project_name = project_option
 
+    # สร้าง full_thread_id จากค่าที่อยู่ใน session
+    full_thread_id = f"{username}_{project_name}" if project_name else ""
+
     st.divider()
-    st.header("🎨 Writing Style")
-    # มั่นใจว่าบรรทัดนี้รันแน่นอนเมื่อเปิดแอป
-    style_choice = st.selectbox(
-        "เลือกสไตล์การเขียน",
-        ["Technical", "Storytelling", "Executive Summary"]
-    )
+    style_choice = st.selectbox("เลือกสไตล์การเขียน", ["Technical", "Storytelling", "Executive Summary"])
 
-    if st.button("🗑️ ล้างประวัติโปรเจกต์นี้"):
-        import sqlite3
-        conn = sqlite3.connect("agent_memory.db")
-        cursor = conn.cursor()
-        
+    if project_name and st.button("🗑️ ล้างประวัติโปรเจกต์นี้"):
+        DB_URI = os.getenv("SUPABASE_DB_URL")
         try:
-            # 1. ตรวจสอบก่อนว่ามีตาราง checkpoints หรือไม่
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'")
-            table_exists = cursor.fetchone()
-            
-            if table_exists:
-                # 2. ถ้ามีตาราง ให้ลบข้อมูลตามปกติ
-                cursor.execute("DELETE FROM checkpoints WHERE thread_id = ?", (project_name,))
-                conn.commit()
-                st.success(f"ล้างข้อมูลโปรเจกต์ {project_name} เรียบร้อย!")
-            else:
-                # 3. ถ้าไม่มีตาราง แสดงว่ายังไม่มีประวัติให้ลบ
-                st.info("ยังไม่มีประวัติข้อมูลในระบบให้ลบครับ")
-                
-        except Exception as e:
-            st.error(f"เกิดข้อผิดพลาด: {e}")
-        finally:
-            conn.close()
-            
-        st.rerun()
-    
-    if st.button("🧨 Reset Database ทั้งหมด"):
-        import os
-        if os.path.exists("agent_memory.db"):
-            os.remove("agent_memory.db") # ลบไฟล์ทิ้งเลย
-            st.success("ลบฐานข้อมูลทั้งหมดเรียบร้อย! ระบบจะสร้างไฟล์ใหม่เมื่อเริ่มรันงาน")
+            with psycopg.connect(DB_URI) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM checkpoints WHERE thread_id = %s", (full_thread_id,))
+            st.success("ล้างข้อมูลสำเร็จ!")
             st.rerun()
+        except Exception as e:
+            st.error(f"Error: {e}")
 
-# --- 3. ส่วนควบคุมการทำงาน (Main Control Logic) ---
-if project_name:
-    config = {"configurable": {"thread_id": project_name}}
+# --- ส่วนแสดงตารางสรุปงาน (ปรากฏเฉพาะตอนยังไม่ได้เลือกโปรเจกต์) ---
+if not project_name:
+    st.subheader(f"📊 ภาพรวมโปรเจกต์ของคุณอาร์ท")
     
-    # ตรวจสอบสถานะล่าสุดของ Graph
-    snapshot = multi_agent_app.get_state(config)
+    # เรียกใช้ฟังก์ชันที่เราเพิ่งสร้าง
+    from core.graph import get_project_summary
+    projects = get_project_summary(username)
+    
+    if projects:
+        # แสดงผลเป็นตาราง DataFrame ของ Streamlit ที่สวยงามและเรียงลำดับได้
+        st.dataframe(
+            projects, 
+            use_container_width=True, 
+            hide_index=True,
+            column_config={
+                "Project Name": st.column_config.TextColumn("ชื่อโปรเจกต์"),
+                "Last Updated": st.column_config.TextColumn("อัปเดตล่าสุด 🕒")
+            }
+        )
+        st.caption("💡 เลือกชื่อโปรเจกต์ที่เมนูด้านซ้ายเพื่อทำงานต่อครับ")
+    else:
+        st.info("🌟 ยังไม่มีประวัติงานในระบบ เริ่มต้นสร้างโปรเจกต์แรกของคุณได้ที่ Sidebar เลยครับ!")
 
-    # ส่วนรับหัวข้อวิจัยใหม่ (กรณีเริ่มใหม่หรือไม่มีข้อมูลค้าง)
+# --- 3. ส่วนควบคุมการทำงานหลัก ---
+# --- เลื่อนลงมาตรงส่วนควบคุมการทำงาน (Section 3) ---
+if project_name:
+    config = {"configurable": {"thread_id": full_thread_id}}
+    
+    # สร้าง instance ใหม่ของแอปเพื่อให้การเชื่อมต่อสดใหม่เสมอ
+    app_instance = get_app() 
+    
+    # ใช้ app_instance แทน multi_agent_app ในทุกจุด
+    snapshot = app_instance.get_state(config)
+
     if not snapshot.values:
         topic = st.text_input("ระบุหัวข้อที่ต้องการวิจัย:")
+
         if st.button("🚀 เริ่มต้นรันระบบ", key="start_button"):
-
-            if project_name and style_choice:
-                inputs = {"messages": [("user", topic)], "style_preference": style_choice}
-            # สร้าง Container สำหรับโชว์ Log 
-            log_container = st.container()
+            inputs = {"messages": [("user", topic)], "style_preference": style_choice}
             
-            with st.spinner("ทีม AI กำลังเริ่มงาน..."):
-                # ใช้ stream_mode="values" เพื่อดึงข้อมูลล่าสุดเสมอ
-                for event in multi_agent_app.stream(inputs, config=config, stream_mode="values"):
-                    if "messages" in event:
-                        last_msg = event["messages"][-1]
-                        
-                        # ตรวจสอบว่าเป็น AI พิมพ์มาหรือไม่
-                        if isinstance(last_msg, AIMessage):
-                            with log_container:
-                                with st.chat_message("assistant"):
-                                    # ถ้ามี Tool Calls (เช่นกำลังค้นหา) ให้โชว์สถานะพิเศษ
-                                    if last_msg.tool_calls:
-                                        st.caption("🔍 แผนก Researcher กำลังใช้เครื่องมือค้นหาข้อมูล...")
-                                    else:
-                                        st.markdown(last_msg.content[:200] + "..." if len(last_msg.content) > 200 else last_msg.content)
-        
-        st.success("งานส่วนแรกเสร็จสิ้น! กรุณาตรวจสอบและอนุมัติที่ด้านล่าง")
-        st.rerun()
-
-    # กรณีติด Interrupt (หยุดรอที่ Editor)
+            with st.spinner("AI กำลังวิจัยและบันทึกลงฐานข้อมูล..."):
+                # สร้าง instance สดใหม่
+                app_instance = get_app()
+                
+                # เปลี่ยน stream_mode เป็น updates เพื่อบังคับให้มีการเขียน Checkpoint ทุก Node
+                for event in app_instance.stream(inputs, config=config, stream_mode="updates"):
+                    # พิมพ์ Debug ใน Terminal เพื่อดูว่า AI ทำงานจริงไหม
+                    print(f"--- Node Executed: {list(event.keys())} ---") 
+                
+                st.success("บันทึกข้อมูลสำเร็จ! กำลังเปลี่ยนหน้า...")
+                st.rerun() # บังคับ Refresh เพื่อให้ snapshot.values ไม่ว่างเปล่า
     else:
-        st.success(f"📍 สถานะปัจจุบัน: รอการอนุมัติที่แผนก {snapshot.next}")
-        
-        # แสดงบทความล่าสุด (ถ้ามี)
-        # ส่วนการ Preview และ Download บทความ
-        if "final_article" in snapshot.values:
-            # 1. ดึงค่าออกมาเก็บในตัวแปร content ก่อนเป็นอันดับแรก
-            content = snapshot.values["final_article"] 
-            
-            st.subheader("📄 บทความฉบับสมบูรณ์")
-            
-            # 2. ใช้ st.expander ครอบส่วนที่จะโชว์เนื้อหา
-            with st.expander("📝 คลิกเพื่อดูเนื้อหาบทความ", expanded=True):
-                st.markdown(content)
-            
-            # 3. วางปุ่ม Download ไว้ด้านล่าง (ตอนนี้ content ถูกนิยามแล้ว จะไม่ Error)
-            st.download_button(
-                label="📥 ดาวน์โหลดบทความ (Markdown)",
-                data=content, 
-                file_name=f"{project_name}_article.md",
-                mime="text/markdown",
-                key=f"dl_btn_{project_name}"
-            )
-
-        ## --- ส่วนการแสดงผล Quality Score ---
-        # 1. ตรวจสอบว่าใน State ของ AI มีการประเมินคะแนนหรือยัง
-        if "article_score" in snapshot.values:
-            # 2. ดึงค่าคะแนนออกมาเก็บในตัวแปร score
-            score = snapshot.values["article_score"]
-            
-            # 3. แสดงผล Metric
-            st.metric("Quality Score", f"{score}/10")
-            st.progress(score * 10) # แสดงเป็นแถบพลัง 0-100%
-        else:
-            # 4. กรณีที่ยังไม่มีคะแนน (เช่น เพิ่งเริ่มรัน) ให้กำหนดค่าเริ่มต้นหรือแสดงข้อความแจ้งเตือน
-            st.metric("Quality Score", "N/A")
-            st.caption("รอผลการประเมินจาก Reviewer...")
-
-        # ปุ่มควบคุม Human-in-the-loop
-        # ปุ่มควบคุม Human-in-the-loop
-        col1, col2 = st.columns(2)
-        with col1:
-            # ใช้ f-string ผูก key กับ project_name
-            if st.button("✅ อนุมัติและไปต่อ (Continue)", key=f"btn_cont_{project_name}"):
-                with st.spinner("กำลังดำเนินการต่อ..."):
-                    for output in multi_agent_app.stream(None, config=config, stream_mode="updates"):
-                        st.write(f"📍 แผนก {list(output.keys())[0]} เสร็จงานแล้ว")
-                st.rerun()
-        
-        with col2:
-            # ใช้ f-string ผูก key กับ project_name เช่นกัน
-            instruction = st.text_input("พิมพ์คำสั่งแก้ไข", key=f"input_edit_{project_name}")
-            if st.button("🛠️ ส่งคำสั่งแก้ไข", key=f"btn_edit_{project_name}"):
-                if instruction.lower().startswith("editor:"):
-                    multi_agent_app.update_state(config, {"messages": [HumanMessage(content=instruction)]}, as_node="researcher")
-                else:
-                    multi_agent_app.update_state(config, {"messages": [HumanMessage(content=instruction)]})
-                st.success("ส่งคำสั่งเรียบร้อย! กดปุ่ม 'อนุมัติ' เพื่อให้ AI เริ่มแก้")
-
-        # 1. ดึงค่าจาก State ออกมาเก็บในตัวแปร score (ถ้าไม่มีให้เป็น 0)
+        # --- 4. ส่วน Tabs แสดงผล (Clean UI) ---
+        content = snapshot.values.get("final_article", "")
         score = snapshot.values.get("article_score", 0)
 
-        # 2. แสดงผล Metric โดยใช้ตัวแปรที่ดึงออกมาแล้ว
-        if score > 0:
-            st.metric("Quality Score", f"{score}/10")
-            st.progress(score * 10) # แสดงแถบความคืบหน้า 0-100%
-        else:
-            st.metric("Quality Score", "รอการประเมิน")
-            st.caption("Reviewer กำลังตรวจสอบเนื้อหา...")
-
-        # --- เตรียมข้อมูลสำหรับ Tabs ---
-        # ดึงเนื้อหาบทความ (ถ้าไม่มีให้เป็นค่าว่าง) 
-        content = snapshot.values.get("final_article", "") 
-        # ดึงคะแนน (ถ้าไม่มีให้เป็น 0) 
-        score = snapshot.values.get("article_score", 0)
-
-        # สร้าง Tabs สำหรับแยกส่วนเนื้อหา 
-        tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📄 บทความที่ได้", "🕵️ เบื้องหลังการทำงาน (Logs)"])
+        tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📄 บทความ", "🕵️ Logs"])
 
         with tab1:
-            # ใส่ Metric คะแนน และสถานะปัจจุบันที่นี่
-            st.metric("Quality Score", f"{score}/10")
-            # ปุ่มควบคุม Continue / Edit
+            st.subheader(f"📍 สถานะ: รออนุมัติที่ {snapshot.next}")
+            
+            # --- ส่วนที่ 1: แสดง Metric ---
+            col1, col2 = st.columns(2) 
+            with col1:
+                st.metric("Quality Score", f"{score}/10" if score > 0 else "รอตรวจ")
+            
+            st.divider()
+            
+            # --- ส่วนที่ 2: ปุ่มควบคุม (จุดที่ต้องเช็ค) ---
+            c1, c2 = st.columns(2) # <<< มั่นใจว่าบรรทัดนี้อยู่ข้างนอก ไม่ได้อยู่ใน if ไหนครับ
+            
+            with c1:
+                if st.button("✅ อนุมัติและไปต่อ", key="btn_cont"):
+                    with st.spinner("กำลังดำเนินการต่อ..."):
+                        for _ in app_instance.stream(None, config=config, stream_mode="values"):
+                            pass
+                    st.rerun()
+            
+            with c2:
+                instruction = st.text_input("แก้ไขเพิ่มเติม")
+                if st.button("🛠️ ส่งคำสั่ง", key="btn_edit"):
+                    app_instance.update_state(config, {"messages": [HumanMessage(content=instruction)]})
+                    st.success("ส่งคำสั่งแล้ว!")
+                    st.rerun()
 
         with tab2:
-            # ใส่เนื้อหาบทความและปุ่ม Download ที่นี่
-            st.markdown(content)
+            if content:
+                st.markdown(content)
+                st.download_button("📥 Download", content, file_name=f"{project_name}.md")
+            else:
+                st.info("กำลังรอเนื้อหาจาก AI...")
 
         with tab3:
-            # ใส่ประวัติข้อความ (Messages) ทั้งหมดเพื่อใช้ Debug
-            for msg in snapshot.values["messages"]:
-                st.write(f"**{msg.type.upper()}**: {msg.content[:100]}...")
+            st.subheader("⏳ Research Time Machine")
+            # เปลี่ยนจาก multi_agent_app เป็น app_instance
+            history = list(app_instance.get_state_history(config))
+
+            if history:
+                # 2. สร้าง Slider เพื่อเลือกช่วงเวลา (ย้อนจากปัจจุบันไปอดีต)
+                total_steps = len(history)
+                # เราใช้ [::-1] เพื่อให้ Step 1 คือจุดเริ่มต้น และ Step ล่าสุดอยู่ขวาสุด
+                reversed_history = history[::-1] 
+                
+                selected_step = st.select_slider(
+                    "เลื่อนเพื่อย้อนดูสถานะในแต่ละขั้นตอน:",
+                    options=range(total_steps),
+                    value=total_steps - 1, # ค่าเริ่มต้นอยู่ที่ปัจจุบัน
+                    format_func=lambda x: f"ขั้นตอนที่ {x+1}"
+                )
+                
+                # 3. ดึงสถานะ ณ เวลานั้นมาแสดงผล
+                current_view = reversed_history[selected_step]
+                st.info(f"📅 บันทึกเมื่อ: {current_view.created_at or 'เพิ่งเริ่ม'}")
+                
+                # แสดงข้อความแชทในขั้นตอนนั้นๆ
+                for msg in current_view.values.get("messages", []):
+                    with st.chat_message(msg.type):
+                        st.markdown(msg.content)
+            else:
+                st.info("ยังไม่มีประวัติการบันทึกในโปรเจกต์นี้")

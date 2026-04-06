@@ -13,8 +13,12 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.sqlite import SqliteSaver
+#from langgraph.checkpoint.sqlite import SqliteSaver
 #from langgraph_checkpoint_sqlite import SqliteSaver
+# ลบบรรทัดเดิม: from langgraph.checkpoint.sqlite import SqliteSaver
+# เพิ่มบรรทัดใหม่:
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg import Connection # สำหรับจัดการ Connection
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 import os
 google_api_key = os.getenv("GOOGLE_API_KEY")
@@ -23,6 +27,15 @@ google_api_key = os.getenv("GOOGLE_API_KEY")
 from core.tools import search_tool, send_line_message
 
 load_dotenv()
+
+# สร้าง Connection String สำหรับ Supabase
+# หมายเหตุ: คุณต้องใช้ "Connection String" จากหน้า Settings > Database ใน Supabase นะครับ
+DB_URI = os.getenv("SUPABASE_DB_URL")
+
+# ใช้ Context Manager เพื่อจัดการ Memory
+def get_memory():
+    sync_connection = Connection.connect(DB_URI)
+    return PostgresSaver(sync_connection)
 
 # 1. กำหนดโครงสร้างข้อมูล (State)
 class TeamState(TypedDict):
@@ -139,28 +152,71 @@ builder.add_conditional_edges("reviewer", reviewer_router, {"translator": "trans
 builder.add_edge("translator", END)
 
 # ตั้งค่าฐานข้อมูล SQLite
-db_path = os.path.join(os.path.dirname(__file__), "../database/agent_memory.db")
-os.makedirs(os.path.dirname(db_path), exist_ok=True)
-conn = sqlite3.connect(db_path, check_same_thread=False)
-memory = SqliteSaver(conn)
+# db_path = os.path.join(os.path.dirname(__file__), "../database/agent_memory.db")
+# os.makedirs(os.path.dirname(db_path), exist_ok=True)
+# conn = sqlite3.connect(db_path, check_same_thread=False)
+# memory = SqliteSaver(conn)
 
-# Compile Graph พร้อมระบบหยุดตรวจงาน (Interrupt)
-multi_agent_app = builder.compile(checkpointer=memory, interrupt_before=["editor"])
-
-# ฟังก์ชันเสริมสำหรับ Streamlit
+# --- แก้ไขฟังก์ชัน get_app ให้รับส่ง Connection ได้ถูกต้อง ---
+def get_app():
+    """ฟังก์ชันสำหรับ Compile Graph โดยใช้ PostgresSaver แบบบังคับเขียน (Manual Commit)"""
+    conn = Connection.connect(DB_URI)
+    
+    # บังคับให้ทุกคำสั่ง SQL เขียนลงแผ่นดิสก์ของ Supabase ทันที
+    conn.autocommit = True 
+    
+    checkpointer = PostgresSaver(conn)
+    checkpointer.setup() 
+    
+    # สำคัญ: ห้ามเปลี่ยน autocommit เป็น False เพราะเราต้องการให้มันบันทึก "ทันที" หลังจบ Node
+    return builder.compile(checkpointer=checkpointer, interrupt_before=["editor"])
+# --- ปรับปรุงฟังก์ชัน get_all_threads ให้รองรับ Postgres ---
+# --- ปรับปรุง get_all_threads ให้แม่นยำขึ้น ---
 def get_all_threads():
-    """ดึงรายชื่อ Thread ID ทั้งหมด โดยตรวจสอบก่อนว่ามีตารางหรือไม่"""
+    """ดึงรายชื่อ Thread ID จาก Supabase แบบกรองเฉพาะที่มีข้อมูลจริง"""
     try:
-        cursor = conn.cursor()
-        # ตรวจสอบว่ามีตาราง checkpoints หรือไม่ก่อน Query
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='checkpoints'")
-        table_exists = cursor.fetchone()
-        
-        if table_exists:
-            cursor.execute("SELECT DISTINCT thread_id FROM checkpoints")
-            return [row[0] for row in cursor.fetchall()]
-        else:
-            return [] # ถ้ายังไม่มีตาราง ให้ส่ง List ว่างกลับไป
+        # ใช้ context manager เพื่อปิด connection เสมอ
+        with Connection.connect(DB_URI) as conn:
+            with conn.cursor() as cur:
+                # ตรวจสอบก่อนว่าตารางมีอยู่จริงไหม
+                cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'checkpoints')")
+                if cur.fetchone()[0]:
+                    # ดึง thread_id ที่มีการบันทึกข้อมูลแล้วจริงๆ
+                    cur.execute("SELECT DISTINCT thread_id FROM checkpoints")
+                    threads = [row[0] for row in cur.fetchall()]
+                    print(f"✅ Found threads: {threads}") # Debug เพื่อดูใน Terminal
+                    return threads
+                return []
     except Exception as e:
-        print(f"⚠️ [Database View Error]: {e}")
+        print(f"⚠️ [Supabase Database Error]: {e}")
+        return []
+
+def get_project_summary(username: str):
+    """ดึงรายชื่อโปรเจกต์และเวลาอัปเดตล่าสุดของคุณอาร์ทจาก Supabase"""
+    summary_data = []
+    DB_URI = os.getenv("SUPABASE_DB_URL") # ดึง URL จาก .env
+    
+    try:
+        # ใช้ psycopg เชื่อมต่อกับ Supabase
+        with Connection.connect(DB_URI) as conn:
+            with conn.cursor() as cur:
+                # SQL: เลือกชื่อโปรเจกต์และเวลาล่าสุด โดยกรองเฉพาะของ User นี้
+                cur.execute("""
+                    SELECT thread_id, MAX(created_at) as last_update
+                    FROM checkpoints 
+                    WHERE thread_id LIKE %s 
+                    GROUP BY thread_id
+                    ORDER BY last_update DESC
+                """, (f"{username}_%",))
+                
+                for row in cur.fetchall():
+                    # ตัดชื่อ username_ ออกเพื่อให้เหลือชื่อโปรเจกต์ที่คุณอาร์ทตั้งไว้
+                    clean_name = row[0].replace(f"{username}_", "")
+                    summary_data.append({
+                        "Project Name": clean_name,
+                        "Last Updated": row[1].strftime("%d/%m/%Y %H:%M")
+                    })
+        return summary_data
+    except Exception as e:
+        print(f"⚠️ [Database Summary Error]: {e}")
         return []
